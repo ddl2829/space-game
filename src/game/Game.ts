@@ -4,13 +4,13 @@ import { Camera } from './systems/Camera';
 import { Ship } from './entities/Ship';
 import { Starfield } from './rendering/Starfield';
 
-// Mining system imports
+// Core system imports
 import { Inventory } from './components/Inventory';
 import { ParticleSystem } from './rendering/Particles';
 import { ResourceDropManager } from './systems/ResourceDrop';
-import { MiningSystem } from './systems/MiningSystem';
 import { AsteroidSpawner } from './systems/AsteroidSpawner';
 import { HUD } from './ui/HUD';
+import { RESOURCES } from '../data/resources';
 
 // Trading system imports (Sprint 2)
 import { Station, DockingSystem, Market, StationUI, getAllStations } from './trading';
@@ -29,6 +29,17 @@ import {
   SAFE_ZONE,
   FRONTIER_ZONE,
 } from './combat';
+
+// Celestial system imports (Sprint 5)
+import { CelestialSystem } from './systems/CelestialSystem';
+import { SAFE_ZONE_CELESTIALS, FRONTIER_CELESTIALS } from '../data/celestials';
+
+// Mission system imports (Sprint 6)
+import { MissionSystem } from './systems/MissionSystem';
+
+// UI imports
+import { POIMarkers, POI } from './ui/POIMarkers';
+import { VirtualController } from './ui/VirtualController';
 
 /**
  * Main game class that manages the game loop, rendering, and systems.
@@ -74,18 +85,11 @@ export class Game {
   /** Manages resource drops from destroyed asteroids */
   private resourceDrops!: ResourceDropManager;
 
-  /** Handles mining interaction with asteroids */
-  private miningSystem!: MiningSystem;
-
   /** Spawns and manages asteroid field */
   private asteroidSpawner!: AsteroidSpawner;
 
   /** Heads-up display for UI */
   private hud!: HUD;
-
-  /** Current mouse screen position */
-  private mouseScreenX: number = 0;
-  private mouseScreenY: number = 0;
 
   // Trading system properties (Sprint 2)
   /** Space stations */
@@ -129,8 +133,20 @@ export class Game {
   /** Jump gates between zones */
   private jumpGates: JumpGate[] = [];
 
+  /** Celestial system for planets, stars, black holes */
+  private celestialSystem!: CelestialSystem;
+
+  /** Mission system for quests */
+  private missionSystem!: MissionSystem;
+
   /** Whether player is currently docked */
   private isDocked: boolean = false;
+
+  /** POI markers for edge-of-screen indicators */
+  private poiMarkers: POIMarkers;
+
+  /** Virtual controller for mobile/touch devices */
+  private virtualController: VirtualController;
 
   constructor(config: GameConfig) {
     // Get canvas element
@@ -160,6 +176,17 @@ export class Game {
     // Set camera to follow ship
     this.camera.follow(this.ship);
 
+    // Initialize POI markers
+    this.poiMarkers = new POIMarkers();
+
+    // Initialize virtual controller for mobile/touch
+    this.virtualController = new VirtualController({
+      joystickSize: 120,
+      buttonSize: 60,
+      opacity: 0.5,
+    });
+    this.input.setVirtualController(this.virtualController);
+
     // Initialize upgrade system first (before mining, so stats are ready)
     this.initializeUpgradeSystem();
 
@@ -171,6 +198,12 @@ export class Game {
 
     // Initialize combat systems (Sprint 4)
     this.initializeCombatSystem();
+
+    // Initialize celestial systems (Sprint 5)
+    this.initializeCelestialSystem();
+
+    // Initialize mission system (Sprint 6)
+    this.initializeMissionSystem();
 
     // Load saved game if exists
     this.loadGame();
@@ -214,6 +247,16 @@ export class Game {
         // Update combat max health
         if (this.combatSystem) {
           this.combatSystem.setPlayerMaxHealth(this.shipStats.getStat('maxHealth'));
+
+          // Update weapon stats based on upgrades
+          const weaponTier = this.shipStats.getUpgradeTier('weaponSystem');
+          this.combatSystem.setPlayerWeaponConfig({
+            fireRate: this.shipStats.getStat('weaponFireRate'),
+            projectileDamage: this.shipStats.getStat('weaponDamage'),
+            // Multi-shot at tier 3: 3 projectiles with 15 degree spread
+            projectileCount: weaponTier >= 3 ? 3 : 1,
+            spreadAngle: weaponTier >= 3 ? 0.26 : 0, // ~15 degrees in radians
+          });
         }
       }
     });
@@ -246,19 +289,6 @@ export class Game {
     // Create resource drop manager
     this.resourceDrops = new ResourceDropManager(this.inventory, this.particles);
 
-    // Create mining system with speed from ShipStats
-    const miningSpeedMultiplier = this.shipStats.getStat('miningSpeed');
-    this.miningSystem = new MiningSystem(
-      this.inventory,
-      this.particles,
-      this.resourceDrops,
-      {
-        miningRange: 150,
-        miningRate: 50 * miningSpeedMultiplier,
-        baseMineDuration: 3 / miningSpeedMultiplier,
-      }
-    );
-
     // Create asteroid spawner
     this.asteroidSpawner = new AsteroidSpawner({
       minAsteroids: 15,
@@ -273,10 +303,8 @@ export class Game {
 
     // Create HUD
     this.hud = new HUD(this.inventory);
-    this.hud.setMiningSystem(this.miningSystem);
 
-    // Connect mining system to asteroids
-    this.miningSystem.setAsteroids(this.asteroidSpawner.getAsteroids());
+    // Note: HUD mission connection happens in initializeMissionSystem
   }
 
   /**
@@ -299,13 +327,29 @@ export class Game {
     // Create station UI
     this.stationUI = new StationUI(this.inventory);
 
+    // Pass all markets and stations for market intel tab
+    const stationMap = new Map<string, Station>();
+    for (const station of this.stations) {
+      stationMap.set(station.id, station);
+    }
+    this.stationUI.setAllMarketsAndStations(this.markets, stationMap);
+    this.stationUI.setSaveSystem(this.saveSystem);
+
     // Set up docking callbacks
     this.dockingSystem.setCallbacks({
       onDock: (station) => {
         const market = this.markets.get(station.id);
         if (market) {
+          // Auto-discover station when docking
+          if (this.saveSystem.discoverLocation(station.id)) {
+            console.log(`[Game] Discovered ${station.name}!`);
+          }
           this.stationUI.show(station, market);
           this.isDocked = true;
+          // Hide virtual controller while docked to prevent touch interference
+          if (this.virtualController.isEnabled()) {
+            this.virtualController.disable();
+          }
           console.log(`[Game] Docked at ${station.name}`);
         }
       },
@@ -313,6 +357,10 @@ export class Game {
         this.stationUI.hide();
         this.upgradeShopUI.hide();
         this.isDocked = false;
+        // Re-enable virtual controller on undock (only on touch devices)
+        if (!this.virtualController.isEnabled() && this.virtualController.isTouchDevice()) {
+          this.virtualController.enable();
+        }
         // Save game on undock
         this.saveSystem.save();
         console.log('[Game] Undocked');
@@ -328,6 +376,10 @@ export class Game {
         this.dockingSystem.forceUndock();
         this.stationUI.hide();
         this.isDocked = false;
+        // Re-enable virtual controller on undock (only on touch devices)
+        if (!this.virtualController.isEnabled() && this.virtualController.isTouchDevice()) {
+          this.virtualController.enable();
+        }
         this.saveSystem.save();
       },
       onSell: () => {
@@ -337,6 +389,9 @@ export class Game {
       onBuy: () => {
         // Refresh station UI after transaction
         this.stationUI.refresh();
+      },
+      onOpenUpgrades: () => {
+        this.upgradeShopUI.show();
       },
     });
   }
@@ -404,10 +459,13 @@ export class Game {
           // Enemies are already cleared by respawn process
           break;
         case 'pirate_destroyed':
-          // Award loot credits
-          if (event.loot) {
-            this.inventory.addCredits(event.loot);
-            console.log(`[Game] Earned ${event.loot} credits from pirate loot`);
+          // Spawn random loot drops at pirate's position
+          if (event.position) {
+            this.spawnPirateLoot(event.position.x, event.position.y, event.loot || 50);
+          }
+          // Track pirate kill for missions
+          if (this.missionSystem) {
+            this.missionSystem.recordPirateKill();
           }
           break;
       }
@@ -432,6 +490,124 @@ export class Game {
     this.jumpGates.push(gateSafe, gateFrontier);
 
     // Could add more gate pairs for additional zones
+  }
+
+  /**
+   * Initializes the celestial system (Sprint 5).
+   */
+  private initializeCelestialSystem(): void {
+    this.celestialSystem = new CelestialSystem();
+
+    // Add safe zone celestials
+    for (const planet of SAFE_ZONE_CELESTIALS.planets) {
+      this.celestialSystem.addPlanet(planet);
+    }
+
+    // Add frontier celestials
+    for (const planet of FRONTIER_CELESTIALS.planets) {
+      this.celestialSystem.addPlanet(planet);
+    }
+    for (const star of FRONTIER_CELESTIALS.stars) {
+      this.celestialSystem.addStar(star);
+    }
+    for (const blackHole of FRONTIER_CELESTIALS.blackHoles) {
+      this.celestialSystem.addBlackHole(blackHole);
+    }
+  }
+
+  /**
+   * Initializes the mission system (Sprint 6).
+   */
+  private initializeMissionSystem(): void {
+    // Create mission system
+    this.missionSystem = new MissionSystem();
+
+    // Connect mission system to station UI
+    this.stationUI.setMissionSystem(this.missionSystem);
+
+    // Connect mission system to save system for persistence
+    this.saveSystem.setMissionSystem(this.missionSystem);
+
+    // Connect HUD to mission system for progress display
+    this.hud.setMissionSystem(() => this.missionSystem.getActiveMissionsSummary());
+
+    // Handle mission events with auto-reward
+    this.missionSystem.setCallbacks({
+      onMissionCompleted: (mission) => {
+        console.log(`[Game] Mission completed: ${mission.title}`);
+
+        // Auto-collect reward immediately
+        const reward = this.missionSystem.collectReward(mission.id);
+        if (reward > 0) {
+          this.inventory.addCredits(reward);
+          // Show notification
+          this.showMissionNotification(`${mission.title} Complete!`, `+${reward} CR`, '#4ade80');
+          // Save game
+          this.saveSystem.save();
+        }
+      },
+      onMissionProgress: (mission) => {
+        if (mission.objective.type === 'kill_pirates') {
+          console.log(`[Game] Mission progress: ${mission.objective.currentCount}/${mission.objective.targetCount}`);
+        }
+      },
+    });
+  }
+
+  /**
+   * Shows a floating notification for mission events.
+   */
+  private showMissionNotification(title: string, subtitle: string, color: string): void {
+    // Create floating notification element
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 20px 40px;
+      background: rgba(0, 0, 0, 0.9);
+      border: 2px solid ${color};
+      border-radius: 10px;
+      z-index: 2000;
+      text-align: center;
+      animation: missionNotifyIn 0.3s ease-out, missionNotifyOut 0.5s ease-in 2s forwards;
+      pointer-events: none;
+      box-shadow: 0 0 30px ${color}40;
+    `;
+
+    notification.innerHTML = `
+      <div style="color: ${color}; font-size: 24px; font-weight: bold; font-family: monospace; margin-bottom: 8px;">
+        ${title}
+      </div>
+      <div style="color: #ffd700; font-size: 20px; font-weight: bold; font-family: monospace;">
+        ${subtitle}
+      </div>
+    `;
+
+    // Add animation keyframes if not present
+    if (!document.getElementById('mission-notify-animations')) {
+      const style = document.createElement('style');
+      style.id = 'mission-notify-animations';
+      style.textContent = `
+        @keyframes missionNotifyIn {
+          0% { opacity: 0; transform: translateX(-50%) translateY(-20px) scale(0.9); }
+          100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+        }
+        @keyframes missionNotifyOut {
+          0% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+          100% { opacity: 0; transform: translateX(-50%) translateY(-20px) scale(0.9); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(notification);
+
+    // Remove after animation
+    setTimeout(() => {
+      notification.remove();
+    }, 2500);
   }
 
   /**
@@ -497,9 +673,6 @@ export class Game {
     // Resize handler
     window.addEventListener('resize', this.handleResize.bind(this));
 
-    // Mouse move handler to track mouse position
-    this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
-
     // Keyboard handler for UI controls
     window.addEventListener('keydown', this.handleKeyDown.bind(this));
   }
@@ -561,15 +734,6 @@ export class Game {
         break;
       }
     }
-  }
-
-  /**
-   * Handles mouse move events to track screen position.
-   */
-  private handleMouseMove(e: MouseEvent): void {
-    const rect = this.canvas.getBoundingClientRect();
-    this.mouseScreenX = e.clientX - rect.left;
-    this.mouseScreenY = e.clientY - rect.top;
   }
 
   /**
@@ -657,8 +821,77 @@ export class Game {
       return;
     }
 
+    // Handle spacebar/fire button action - always shoot
+    if (this.input.isActionPressed()) {
+      // Always shoot in facing direction
+      this.combatSystem.playerShoot(
+        this.ship.position.x,
+        this.ship.position.y,
+        this.ship.rotation
+      );
+    }
+
+    // Check projectile collisions with asteroids (mining via shooting)
+    this.checkProjectileAsteroidCollisions();
+
     // Update ship movement
     this.ship.update(deltaTime);
+
+    // Update celestial bodies
+    this.celestialSystem.update(deltaTime);
+
+    // Check for celestial discoveries (when player gets close)
+    this.checkCelestialDiscoveries();
+
+    // Update mission system and check delivery completions
+    this.missionSystem.update(deltaTime);
+    const planets = this.celestialSystem.getPlanets().map((p) => ({
+      name: p.name,
+      x: p.x,
+      y: p.y,
+      radius: p.radius,
+    }));
+    this.missionSystem.checkDeliveryCompletion(this.ship.position.x, this.ship.position.y, planets);
+
+    // Apply black hole gravity to ship
+    const gravity = this.celestialSystem.getGravityForce(
+      this.ship.position.x,
+      this.ship.position.y
+    );
+    this.ship.velocity.x += gravity.fx * deltaTime;
+    this.ship.velocity.y += gravity.fy * deltaTime;
+
+    // Check star damage
+    const starDamage = this.celestialSystem.checkStarDamage(
+      this.ship.position.x,
+      this.ship.position.y
+    );
+    if (starDamage > 0) {
+      this.combatSystem.damagePlayer(
+        starDamage * deltaTime,
+        this.ship.position.x,
+        this.ship.position.y,
+        this.ship
+      );
+    }
+
+    // Check black hole capture
+    const capturedBy = this.celestialSystem.checkBlackHoleCapture(
+      this.ship.position.x,
+      this.ship.position.y
+    );
+    if (capturedBy) {
+      const exit = capturedBy.getExitPoint();
+      this.ship.position.x = exit.x;
+      this.ship.position.y = exit.y;
+      this.ship.rotation = exit.angle;
+      // Add some exit velocity
+      this.ship.velocity.x = Math.cos(exit.angle) * 300;
+      this.ship.velocity.y = Math.sin(exit.angle) * 300;
+      // Clear enemies and reinitialize asteroids
+      this.enemySpawner.clear();
+      this.asteroidSpawner.initialize(exit.x, exit.y);
+    }
 
     // Update camera to follow ship
     this.camera.update(deltaTime);
@@ -697,12 +930,18 @@ export class Game {
     this.dockingSystem.updatePlayerPosition(this.ship.position.x, this.ship.position.y);
     this.dockingSystem.update(deltaTime);
 
+    // Update virtual controller button mode based on station proximity
+    if (this.virtualController.isEnabled()) {
+      const nearStation = this.dockingSystem.isApproaching();
+      this.virtualController.setButtonMode(nearStation ? 'dock' : 'fire');
+    }
+
     // Update particles
     this.particles.update(deltaTime);
   }
 
   /**
-   * Updates all mining-related systems.
+   * Updates asteroid and resource drop systems.
    */
   private updateMiningSystems(deltaTime: number): void {
     // Get player position from ship
@@ -712,18 +951,136 @@ export class Game {
     // Update player position for all systems
     this.asteroidSpawner.updatePlayerPosition(playerX, playerY);
     this.resourceDrops.updatePlayerPosition(playerX, playerY);
-    this.miningSystem.updatePlayerPosition(playerX, playerY);
-
-    // Convert mouse screen position to world position
-    const worldMousePos = this.camera.screenToWorld(this.mouseScreenX, this.mouseScreenY);
-    this.miningSystem.updateMouseWorldPosition(worldMousePos.x, worldMousePos.y);
 
     // Update all systems
     this.asteroidSpawner.update(deltaTime);
-    this.miningSystem.setAsteroids(this.asteroidSpawner.getAsteroids());
-    this.miningSystem.update(deltaTime);
     this.resourceDrops.update(deltaTime);
     this.hud.update(deltaTime);
+  }
+
+  /**
+   * Spawn loot drops when a pirate is destroyed.
+   */
+  private spawnPirateLoot(x: number, y: number, creditValue: number): void {
+    // Spawn 2-4 random resource drops based on credit value
+    const dropCount = 2 + Math.floor(Math.random() * 3);
+
+    for (let i = 0; i < dropCount; i++) {
+      // Pick a random resource weighted by tier
+      const roll = Math.random();
+      let resource;
+      if (roll < 0.1) {
+        resource = RESOURCES.platinum;
+      } else if (roll < 0.4) {
+        resource = RESOURCES.titanium;
+      } else {
+        resource = RESOURCES.iron;
+      }
+
+      // Calculate quantity based on credit value and resource price
+      const quantity = Math.max(1, Math.floor((creditValue / dropCount) / resource.basePrice));
+
+      // Spawn with random velocity
+      const angle = (i / dropCount) * Math.PI * 2 + Math.random() * 0.5;
+      const speed = 30 + Math.random() * 50;
+
+      this.resourceDrops.spawn({
+        x: x + Math.cos(angle) * 20,
+        y: y + Math.sin(angle) * 20,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        resource,
+        quantity,
+      });
+    }
+
+    // Spawn explosion particles
+    for (let i = 0; i < 15; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 50 + Math.random() * 100;
+      this.particles.emit({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.4 + Math.random() * 0.4,
+        size: 3 + Math.random() * 4,
+        color: '#f84',
+        type: 'spark',
+      });
+    }
+
+    console.log(`[Game] Spawned ${dropCount} loot drops from pirate`);
+  }
+
+  /**
+   * Check player projectile collisions with asteroids for mining via shooting.
+   */
+  private checkProjectileAsteroidCollisions(): void {
+    const projectiles = this.combatSystem.getWeaponSystem().getPlayerProjectiles();
+    const asteroids = this.asteroidSpawner.getAsteroids();
+
+    for (const projectile of projectiles) {
+      if (!projectile.active) continue;
+
+      for (const asteroid of asteroids) {
+        if (asteroid.isDestroyed) continue;
+
+        // Check collision
+        const dx = asteroid.x - projectile.position.x;
+        const dy = asteroid.y - projectile.position.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const collisionDistance = asteroid.radius + projectile.getCollisionRadius();
+
+        if (distance < collisionDistance) {
+          // Damage the asteroid
+          const damage = projectile.damage;
+          const resourcesDropped = asteroid.mine(damage);
+
+          // Spawn mining particles
+          for (let i = 0; i < 5; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 50 + Math.random() * 100;
+            this.particles.emit({
+              x: projectile.position.x,
+              y: projectile.position.y,
+              vx: Math.cos(angle) * speed,
+              vy: Math.sin(angle) * speed,
+              life: 0.3 + Math.random() * 0.3,
+              size: 2 + Math.random() * 3,
+              color: asteroid.resource.color,
+              type: 'spark',
+            });
+          }
+
+          // Check if asteroid was destroyed
+          if (resourcesDropped > 0) {
+            // Spawn destruction particles
+            for (let i = 0; i < 20; i++) {
+              const angle = Math.random() * Math.PI * 2;
+              const speed = 30 + Math.random() * 80;
+              this.particles.emit({
+                x: asteroid.x,
+                y: asteroid.y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 0.5 + Math.random() * 0.5,
+                size: 3 + Math.random() * 5,
+                color: '#666',
+                type: 'debris',
+              });
+            }
+
+            // Spawn resource drops
+            this.resourceDrops.spawnFromAsteroid(asteroid, resourcesDropped);
+          }
+
+          // Destroy the projectile
+          projectile.destroy();
+          break; // Projectile can only hit one asteroid
+        }
+      }
+    }
   }
 
   /**
@@ -766,13 +1123,16 @@ export class Game {
     this.combatSystem.render(ctx, cameraX, cameraY);
 
     // Render UI (screen space)
-    this.renderUI(ctx, rect.width, rect.height);
+    this.renderUI(ctx, rect.width, rect.height, cameraX, cameraY);
   }
 
   /**
    * Renders all world-space objects.
    */
   private renderWorldObjects(ctx: CanvasRenderingContext2D, cameraX: number, cameraY: number): void {
+    // Render celestial bodies (behind everything)
+    this.celestialSystem.render(ctx, cameraX, cameraY);
+
     // Render asteroids
     this.asteroidSpawner.render(ctx, cameraX, cameraY);
 
@@ -802,20 +1162,29 @@ export class Game {
   /**
    * Renders all UI elements.
    */
-  private renderUI(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  private renderUI(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    cameraX: number,
+    cameraY: number
+  ): void {
     // Render debug info first (bottom layer)
     if (this.debug) {
       this.renderDebugInfo(ctx);
     }
 
-    // Render HUD (cargo, etc.)
+    // Render HUD (credits, missions)
     this.hud.render(ctx);
 
-    // Render zone indicator
-    this.zoneSystem.renderHUD(ctx, width - 150, 10);
+    // Render zone indicator (top-left)
+    this.zoneSystem.renderHUD(ctx, 20, 20);
 
     // Render health bar
     this.combatSystem.renderHealthBar(ctx, 10, height - 50);
+
+    // Render cargo meter below health bar
+    this.hud.renderCargoMeter(ctx, 10, height - 28);
 
     // Render threat indicator if enemies nearby
     if (this.enemySpawner.hasNearbyThreats(this.ship.position.x, this.ship.position.y)) {
@@ -834,6 +1203,65 @@ export class Game {
     if (this.isDocked) {
       this.renderDockedIndicator(ctx, width);
     }
+
+    // Build POI list for edge-of-screen markers (only discovered locations)
+    const pois: POI[] = [];
+
+    // Add discovered stations
+    for (const station of this.stations) {
+      if (this.saveSystem.isLocationDiscovered(station.id)) {
+        pois.push({
+          x: station.x,
+          y: station.y,
+          type: 'station',
+          name: station.name,
+          color: '#4ade80',
+        });
+      }
+    }
+
+    // Add jump gates (always visible - they're navigation aids)
+    for (const gate of this.jumpGates) {
+      pois.push({
+        x: gate.position.x,
+        y: gate.position.y,
+        type: 'gate',
+        name: 'Jump Gate',
+        color: '#22d3ee',
+      });
+    }
+
+    // Add nearby enemies (always visible - tactical awareness)
+    for (const pirate of this.enemySpawner.getPirates()) {
+      pois.push({
+        x: pirate.position.x,
+        y: pirate.position.y,
+        type: 'enemy',
+        color: '#ef4444',
+      });
+    }
+
+    // Add discovered celestial POIs
+    const celestialPOIs = this.celestialSystem.getAllPOIs();
+    for (const poi of celestialPOIs) {
+      // Map celestial names to location IDs
+      const locationId = this.getLocationIdFromPOI(poi);
+      if (locationId && this.saveSystem.isLocationDiscovered(locationId)) {
+        pois.push(poi);
+      }
+    }
+
+    // Render POI markers at screen edges
+    this.poiMarkers.render(
+      ctx,
+      width,
+      height,
+      cameraX,
+      cameraY,
+      this.ship.position.x,
+      this.ship.position.y,
+      pois
+    );
   }
 
   /**
@@ -876,6 +1304,49 @@ export class Game {
     ctx.fillText('Press E to dock', 20, height - 65);
 
     ctx.restore();
+  }
+
+  /**
+   * Maps POI names to location IDs for discovery tracking.
+   */
+  private getLocationIdFromPOI(poi: POI): string | null {
+    if (!poi.name) return null;
+
+    // Map celestial names to location IDs
+    const nameToIdMap: Record<string, string> = {
+      'Haven Prime': 'planet_haven_prime',
+      'Aurelia': 'planet_aurelia',
+      'Magnus': 'planet_magnus',
+      'Glacius': 'planet_glacius',
+      'Inferno': 'star_inferno',
+      'Void Gate Alpha': 'blackhole_void_gate_alpha',
+      'Void Gate Beta': 'blackhole_void_gate_beta',
+    };
+
+    return nameToIdMap[poi.name] || null;
+  }
+
+  /**
+   * Check if player is close to any celestial bodies and auto-discover them.
+   */
+  private checkCelestialDiscoveries(): void {
+    const playerX = this.ship.position.x;
+    const playerY = this.ship.position.y;
+    const discoveryRange = 500; // Distance to auto-discover celestials
+
+    const celestialPOIs = this.celestialSystem.getAllPOIs();
+    for (const poi of celestialPOIs) {
+      const dx = poi.x - playerX;
+      const dy = poi.y - playerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < discoveryRange) {
+        const locationId = this.getLocationIdFromPOI(poi);
+        if (locationId && this.saveSystem.discoverLocation(locationId)) {
+          console.log(`[Game] Discovered ${poi.name}!`);
+        }
+      }
+    }
   }
 
   /**
@@ -952,13 +1423,6 @@ export class Game {
   }
 
   /**
-   * Gets the mining system.
-   */
-  getMiningSystem(): MiningSystem {
-    return this.miningSystem;
-  }
-
-  /**
    * Gets the asteroid spawner.
    */
   getAsteroidSpawner(): AsteroidSpawner {
@@ -1001,17 +1465,39 @@ export class Game {
   }
 
   /**
+   * Cheat: Add credits for testing.
+   * Usage: Open browser console and run: game.cheat.credits(10000)
+   */
+  public cheat = {
+    credits: (amount: number) => {
+      this.inventory.addCredits(amount);
+      console.log(`[Cheat] Added ${amount} credits. Total: ${this.inventory.getCredits()}`);
+    },
+    health: (amount: number = 100) => {
+      this.combatSystem.healPlayer(amount);
+      console.log(`[Cheat] Healed ${amount} HP`);
+    },
+    resources: (resourceId: string = 'platinum', quantity: number = 50) => {
+      this.inventory.addResource(resourceId, quantity);
+      console.log(`[Cheat] Added ${quantity} ${resourceId}`);
+    },
+    teleport: (x: number, y: number) => {
+      this.ship.position.x = x;
+      this.ship.position.y = y;
+      console.log(`[Cheat] Teleported to (${x}, ${y})`);
+    },
+  };
+
+  /**
    * Cleans up game resources.
    */
   destroy(): void {
     this.stop();
     this.input.destroy();
-    this.miningSystem.cleanup();
     this.saveSystem.destroy();
     this.upgradeShopUI.destroy();
     this.stationUI.destroy();
     window.removeEventListener('resize', this.handleResize.bind(this));
     window.removeEventListener('keydown', this.handleKeyDown.bind(this));
-    this.canvas.removeEventListener('mousemove', this.handleMouseMove.bind(this));
   }
 }

@@ -3,6 +3,9 @@
  *
  * This module exports all mining-related systems for integration
  * with the main Game class from Sprint 0.
+ *
+ * Note: Mining is done by shooting asteroids with weapons.
+ * Asteroids drop resources when destroyed.
  */
 
 // Entities
@@ -14,8 +17,6 @@ export { Inventory } from '../components/Inventory';
 export type { CargoSlot, InventoryState } from '../components/Inventory';
 
 // Systems
-export { MiningSystem } from '../systems/MiningSystem';
-export type { MiningConfig } from '../systems/MiningSystem';
 export { ResourceDropManager } from '../systems/ResourceDrop';
 export { AsteroidSpawner } from '../systems/AsteroidSpawner';
 

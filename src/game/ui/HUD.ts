@@ -3,8 +3,6 @@
  */
 
 import type { Inventory } from '../components/Inventory';
-import { getResourceById } from '../../data/resources';
-import { MiningSystem } from '../systems/MiningSystem';
 
 interface HUDConfig {
   padding: number;
@@ -12,9 +10,14 @@ interface HUDConfig {
   fontFamily: string;
 }
 
+interface MissionSummary {
+  title: string;
+  progress: string;
+  isComplete: boolean;
+}
+
 export class HUD {
   private inventory: Inventory;
-  private miningSystem: MiningSystem | null = null;
   private config: HUDConfig;
   private canvasWidth: number = 0;
   private canvasHeight: number = 0;
@@ -22,6 +25,10 @@ export class HUD {
   // Animation states
   private cargoFlashTimer: number = 0;
   private lastCargoWeight: number = 0;
+
+  // Mission tracking
+  private getMissionSummary: (() => MissionSummary[]) | null = null;
+  private missionCompleteFlash: number = 0;
 
   constructor(inventory: Inventory, config?: Partial<HUDConfig>) {
     this.inventory = inventory;
@@ -33,14 +40,22 @@ export class HUD {
     };
   }
 
-  public setMiningSystem(miningSystem: MiningSystem): void {
-    this.miningSystem = miningSystem;
+  /**
+   * Set mission system reference for displaying active missions
+   */
+  public setMissionSystem(getMissionSummary: () => MissionSummary[]): void {
+    this.getMissionSummary = getMissionSummary;
   }
 
   public update(deltaTime: number): void {
     // Update flash animation
     if (this.cargoFlashTimer > 0) {
       this.cargoFlashTimer -= deltaTime;
+    }
+
+    // Update mission complete flash
+    if (this.missionCompleteFlash > 0) {
+      this.missionCompleteFlash -= deltaTime;
     }
 
     // Detect cargo changes
@@ -57,58 +72,34 @@ export class HUD {
 
     ctx.save();
 
-    // Render cargo panel (top-left)
-    this.renderCargoPanel(ctx);
-
     // Render credits (top-right)
     this.renderCredits(ctx);
 
-    // Render mining progress (center-bottom when mining)
-    if (this.miningSystem?.isMiningActive()) {
-      this.renderMiningProgress(ctx);
-    }
-
-    // Render mining range indicator hint
-    this.renderMiningHint(ctx);
+    // Render active missions (bottom-right)
+    this.renderMissions(ctx);
 
     ctx.restore();
   }
 
-  private renderCargoPanel(ctx: CanvasRenderingContext2D): void {
-    const x = this.config.padding;
-    const y = this.config.padding;
-    const panelWidth = 180;
-    const panelHeight = 120;
-
-    // Panel background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.strokeStyle = 'rgba(100, 150, 200, 0.5)';
-    ctx.lineWidth = 1;
-
-    this.roundRect(ctx, x, y, panelWidth, panelHeight, 5);
-    ctx.fill();
-    ctx.stroke();
-
-    // Panel title
-    ctx.fillStyle = '#8ac';
-    ctx.font = `bold ${this.config.fontSize}px ${this.config.fontFamily}`;
-    ctx.fillText('CARGO', x + 10, y + 20);
-
-    // Weight bar
+  /**
+   * Render cargo meter below the hull bar (bottom-left)
+   */
+  public renderCargoMeter(ctx: CanvasRenderingContext2D, x: number, y: number, width: number = 150): void {
+    const height = 8;
     const currentWeight = this.inventory.getCurrentWeight();
     const maxWeight = this.inventory.getMaxWeight();
-    const weightPercent = currentWeight / maxWeight;
+    const weightPercent = maxWeight > 0 ? currentWeight / maxWeight : 0;
 
-    const barX = x + 10;
-    const barY = y + 30;
-    const barWidth = panelWidth - 20;
-    const barHeight = 8;
+    // Label
+    ctx.fillStyle = '#8ac';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('CARGO', x, y + 7);
 
     // Bar background
     ctx.fillStyle = '#333';
-    ctx.fillRect(barX, barY, barWidth, barHeight);
+    ctx.fillRect(x + 35, y, width - 35, height);
 
-    // Bar fill
+    // Bar fill color based on capacity
     let barColor = '#4a8';
     if (weightPercent > 0.9) {
       barColor = '#a44';
@@ -122,46 +113,23 @@ export class HUD {
     }
 
     ctx.fillStyle = barColor;
-    ctx.fillRect(barX, barY, barWidth * weightPercent, barHeight);
+    ctx.fillRect(x + 35, y, (width - 35) * weightPercent, height);
 
     // Bar border
     ctx.strokeStyle = '#666';
-    ctx.strokeRect(barX, barY, barWidth, barHeight);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 35, y, width - 35, height);
 
     // Weight text
-    ctx.fillStyle = '#ccc';
-    ctx.font = `${this.config.fontSize - 2}px ${this.config.fontFamily}`;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
     ctx.fillText(
-      `${currentWeight.toFixed(1)} / ${maxWeight} kg`,
-      barX,
-      barY + barHeight + 14
+      `${currentWeight.toFixed(0)}/${maxWeight}`,
+      x + 35 + (width - 35) / 2,
+      y + height - 1
     );
-
-    // Resource list
-    const slots = this.inventory.getSlots();
-    let slotY = barY + 35;
-
-    if (slots.length === 0) {
-      ctx.fillStyle = '#666';
-      ctx.fillText('Empty', barX, slotY);
-    } else {
-      for (const slot of slots) {
-        const resource = getResourceById(slot.resourceId);
-        if (!resource) continue;
-
-        // Resource icon (colored dot)
-        ctx.beginPath();
-        ctx.arc(barX + 5, slotY - 4, 4, 0, Math.PI * 2);
-        ctx.fillStyle = resource.color;
-        ctx.fill();
-
-        // Resource name and quantity
-        ctx.fillStyle = '#ddd';
-        ctx.fillText(`${resource.name}: ${slot.quantity}`, barX + 15, slotY);
-
-        slotY += 16;
-      }
-    }
+    ctx.textAlign = 'left';
   }
 
   private renderCredits(ctx: CanvasRenderingContext2D): void {
@@ -190,70 +158,75 @@ export class HUD {
     ctx.fillText(text, x + 15, y + 20);
   }
 
-  private renderMiningProgress(ctx: CanvasRenderingContext2D): void {
-    if (!this.miningSystem) return;
+  private renderMissions(ctx: CanvasRenderingContext2D): void {
+    if (!this.getMissionSummary) return;
 
-    const progress = this.miningSystem.getMiningProgress();
-    const resourceName = this.miningSystem.getTargetResource() || 'Unknown';
+    const missions = this.getMissionSummary();
+    if (missions.length === 0) return;
 
-    const barWidth = 200;
-    const barHeight = 20;
-    const x = (this.canvasWidth - barWidth) / 2;
-    const y = this.canvasHeight - 100;
+    const panelWidth = 200;
+    const missionHeight = 40;
+    const panelHeight = 30 + missions.length * missionHeight;
+    const x = this.canvasWidth - this.config.padding - panelWidth;
+    const y = this.canvasHeight - this.config.padding - panelHeight - 70; // Above health bar area
 
-    // Background panel
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    // Panel background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.strokeStyle = 'rgba(100, 150, 200, 0.5)';
-    this.roundRect(ctx, x - 20, y - 25, barWidth + 40, 65, 8);
+    ctx.lineWidth = 1;
+    this.roundRect(ctx, x, y, panelWidth, panelHeight, 5);
     ctx.fill();
     ctx.stroke();
 
-    // Title
+    // Panel title
     ctx.fillStyle = '#8ac';
     ctx.font = `bold ${this.config.fontSize}px ${this.config.fontFamily}`;
-    ctx.textAlign = 'center';
-    ctx.fillText(`Mining ${resourceName}`, this.canvasWidth / 2, y - 5);
+    ctx.fillText('MISSIONS', x + 10, y + 18);
 
-    // Progress bar background
-    ctx.fillStyle = '#333';
-    this.roundRect(ctx, x, y, barWidth, barHeight, 3);
-    ctx.fill();
+    // Render each mission
+    let missionY = y + 35;
+    for (const mission of missions) {
+      // Mission icon
+      const iconColor = mission.isComplete ? '#4ade80' : '#e94560';
+      ctx.fillStyle = iconColor;
+      ctx.beginPath();
+      ctx.arc(x + 15, missionY + 8, 4, 0, Math.PI * 2);
+      ctx.fill();
 
-    // Progress bar fill
-    const gradient = ctx.createLinearGradient(x, y, x + barWidth, y);
-    gradient.addColorStop(0, '#fa0');
-    gradient.addColorStop(1, '#f50');
-    ctx.fillStyle = gradient;
-    this.roundRect(ctx, x, y, barWidth * progress, barHeight, 3);
-    ctx.fill();
+      // Mission title (truncated if needed)
+      let title = mission.title;
+      if (title.length > 18) {
+        title = title.substring(0, 16) + '...';
+      }
+      ctx.fillStyle = mission.isComplete ? '#4ade80' : '#ddd';
+      ctx.font = `bold ${this.config.fontSize - 2}px ${this.config.fontFamily}`;
+      ctx.fillText(title, x + 25, missionY + 10);
 
-    // Progress bar border
-    ctx.strokeStyle = '#666';
-    ctx.lineWidth = 1;
-    this.roundRect(ctx, x, y, barWidth, barHeight, 3);
-    ctx.stroke();
+      // Progress text
+      let progress = mission.progress;
+      if (progress.length > 22) {
+        progress = progress.substring(0, 20) + '...';
+      }
+      ctx.fillStyle = mission.isComplete ? '#4ade80' : '#888';
+      ctx.font = `${this.config.fontSize - 3}px ${this.config.fontFamily}`;
+      ctx.fillText(progress, x + 25, missionY + 24);
 
-    // Progress percentage
-    ctx.fillStyle = '#fff';
-    ctx.font = `bold ${this.config.fontSize - 1}px ${this.config.fontFamily}`;
-    ctx.fillText(`${Math.floor(progress * 100)}%`, this.canvasWidth / 2, y + 14);
+      // Complete indicator
+      if (mission.isComplete) {
+        ctx.fillStyle = '#4ade80';
+        ctx.font = `bold ${this.config.fontSize - 2}px ${this.config.fontFamily}`;
+        ctx.fillText('DONE', x + panelWidth - 40, missionY + 10);
+      }
 
-    ctx.textAlign = 'left';
+      missionY += missionHeight;
+    }
   }
 
-  private renderMiningHint(ctx: CanvasRenderingContext2D): void {
-    // Only show hint if not actively mining
-    if (this.miningSystem?.isMiningActive()) return;
-
-    const text = 'Hold LMB on asteroid to mine';
-    ctx.font = `${this.config.fontSize - 2}px ${this.config.fontFamily}`;
-    const textWidth = ctx.measureText(text).width;
-
-    const x = (this.canvasWidth - textWidth) / 2;
-    const y = this.canvasHeight - 30;
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.fillText(text, x, y);
+  /**
+   * Trigger mission complete flash animation
+   */
+  public flashMissionComplete(): void {
+    this.missionCompleteFlash = 0.5;
   }
 
   private roundRect(
@@ -275,25 +248,5 @@ export class HUD {
     ctx.lineTo(x, y + radius);
     ctx.quadraticCurveTo(x, y, x + radius, y);
     ctx.closePath();
-  }
-
-  public renderMiningRangeIndicator(
-    ctx: CanvasRenderingContext2D,
-    playerScreenX: number,
-    playerScreenY: number,
-    range: number,
-    isInRange: boolean
-  ): void {
-    ctx.save();
-
-    ctx.strokeStyle = isInRange ? 'rgba(100, 200, 100, 0.3)' : 'rgba(200, 100, 100, 0.3)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([5, 5]);
-
-    ctx.beginPath();
-    ctx.arc(playerScreenX, playerScreenY, range, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.restore();
   }
 }

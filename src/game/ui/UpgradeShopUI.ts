@@ -86,7 +86,7 @@ export class UpgradeShopUI {
         display: flex;
         justify-content: center;
         align-items: center;
-        z-index: 1000;
+        z-index: 1100;
         font-family: 'Segoe UI', system-ui, sans-serif;
       }
 
@@ -471,7 +471,7 @@ export class UpgradeShopUI {
           const diff = after - current;
           const diffStr = effect.isPercentage
             ? `+${Math.round(diff)}`
-            : `+${diff.toFixed(effect.stat === 'miningSpeed' ? 2 : 0)}`;
+            : `+${diff.toFixed(0)}`;
           statsHtml += `<span class="upgrade-preview">${effect.stat}: ${diffStr}</span> `;
         }
       }

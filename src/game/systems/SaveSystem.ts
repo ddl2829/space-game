@@ -4,6 +4,7 @@
 
 import type { Inventory } from '../components/Inventory';
 import type { ShipStats, UpgradeState } from '../components/ShipStats';
+import type { Mission } from '../../data/missions';
 
 /**
  * Current save format version
@@ -28,6 +29,11 @@ export interface SaveData {
   shipPosition: { x: number; y: number };
   shipRotation: number;
   playTime: number; // total seconds played
+  discoveredLocations: string[]; // IDs of discovered POIs (stations, planets, etc.)
+  missions?: {
+    activeMissions: Mission[];
+    availableMissions: Record<string, Mission[]>;
+  };
 }
 
 /**
@@ -61,10 +67,19 @@ export class SaveSystem {
   private sessionStartTime: number = Date.now();
   private previousPlayTime: number = 0;
   private autoSaveInterval: number | null = null;
+  private discoveredLocations: Set<string> = new Set();
+  private missionSystem: { getSaveData: () => { activeMissions: Mission[]; availableMissions: Record<string, Mission[]> }; loadSaveData: (data: { activeMissions: Mission[]; availableMissions: Record<string, Mission[]> }) => void } | null = null;
 
   constructor(inventory: Inventory, shipStats: ShipStats) {
     this.inventory = inventory;
     this.shipStats = shipStats;
+  }
+
+  /**
+   * Set mission system reference for save/load
+   */
+  public setMissionSystem(missionSystem: { getSaveData: () => { activeMissions: Mission[]; availableMissions: Record<string, Mission[]> }; loadSaveData: (data: { activeMissions: Mission[]; availableMissions: Record<string, Mission[]> }) => void }): void {
+    this.missionSystem = missionSystem;
   }
 
   /**
@@ -90,6 +105,8 @@ export class SaveSystem {
           : { x: 0, y: 0 },
         shipRotation: this.ship?.rotation ?? 0,
         playTime: this.getTotalPlayTime(),
+        discoveredLocations: Array.from(this.discoveredLocations),
+        missions: this.missionSystem?.getSaveData(),
       };
 
       const json = JSON.stringify(data);
@@ -167,6 +184,14 @@ export class SaveSystem {
     // Store previous play time
     this.previousPlayTime = data.playTime || 0;
     this.sessionStartTime = Date.now();
+
+    // Restore discovered locations
+    this.discoveredLocations = new Set(data.discoveredLocations || []);
+
+    // Restore missions
+    if (data.missions && this.missionSystem) {
+      this.missionSystem.loadSaveData(data.missions);
+    }
 
     // Note: Ship position is returned in the data but should be applied
     // by the caller since the ship entity may not be set yet
@@ -317,6 +342,39 @@ export class SaveSystem {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Mark a location as discovered
+   */
+  public discoverLocation(locationId: string): boolean {
+    if (this.discoveredLocations.has(locationId)) {
+      return false; // Already discovered
+    }
+    this.discoveredLocations.add(locationId);
+    console.log(`[SaveSystem] Discovered: ${locationId}`);
+    return true;
+  }
+
+  /**
+   * Check if a location has been discovered
+   */
+  public isLocationDiscovered(locationId: string): boolean {
+    return this.discoveredLocations.has(locationId);
+  }
+
+  /**
+   * Get all discovered location IDs
+   */
+  public getDiscoveredLocations(): string[] {
+    return Array.from(this.discoveredLocations);
+  }
+
+  /**
+   * Purchase a map (discover a location via trading)
+   */
+  public purchaseMap(locationId: string): boolean {
+    return this.discoverLocation(locationId);
   }
 
   /**

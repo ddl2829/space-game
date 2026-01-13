@@ -13,8 +13,9 @@ export interface BaseStats {
   thrustPower: number;
   maxSpeed: number;
   rotationSpeed: number;
-  miningSpeed: number;
   maxHealth: number;
+  weaponFireRate: number;
+  weaponDamage: number;
 }
 
 /**
@@ -41,8 +42,9 @@ const DEFAULT_BASE_STATS: BaseStats = {
   thrustPower: 400,
   maxSpeed: 500,
   rotationSpeed: 4,
-  miningSpeed: 1.0, // multiplier
   maxHealth: 100,
+  weaponFireRate: 3,    // shots per second
+  weaponDamage: 25,     // damage per hit
 };
 
 /**
@@ -146,8 +148,9 @@ export class ShipStats {
       thrustPower: this.getStat('thrustPower'),
       maxSpeed: this.getStat('maxSpeed'),
       rotationSpeed: this.getStat('rotationSpeed'),
-      miningSpeed: this.getStat('miningSpeed'),
       maxHealth: this.getStat('maxHealth'),
+      weaponFireRate: this.getStat('weaponFireRate'),
+      weaponDamage: this.getStat('weaponDamage'),
     };
   }
 

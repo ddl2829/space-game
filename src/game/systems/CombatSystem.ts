@@ -5,6 +5,7 @@
 import { Ship } from '../entities/Ship';
 import { Pirate } from '../entities/Pirate';
 import { Vector2 } from '../../utils/Vector2';
+import { WeaponSystem, WeaponConfig } from './WeaponSystem';
 
 export interface DamagePopup {
   x: number;
@@ -14,6 +15,17 @@ export interface DamagePopup {
   lifetime: number;
   maxLifetime: number;
   velocityY: number;
+}
+
+export interface HitParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  color: string;
+  lifetime: number;
+  maxLifetime: number;
+  size: number;
 }
 
 export interface CombatSystemConfig {
@@ -29,6 +41,7 @@ export interface CombatEvent {
   damage?: number;
   source?: string;
   loot?: number;
+  position?: { x: number; y: number };
 }
 
 const DEFAULT_COMBAT_CONFIG: CombatSystemConfig = {
@@ -50,11 +63,14 @@ export class CombatSystem {
   private respawnPosition: Vector2 = new Vector2(0, 0);
   private onCombatEvent: ((event: CombatEvent) => void) | null = null;
   private cargoLostOnDeath: boolean = false;
+  private weaponSystem: WeaponSystem;
+  private hitParticles: HitParticle[] = [];
 
-  constructor(config?: Partial<CombatSystemConfig>) {
+  constructor(config?: Partial<CombatSystemConfig>, weaponConfig?: Partial<WeaponConfig>) {
     this.config = { ...DEFAULT_COMBAT_CONFIG, ...config };
     this.playerHealth = this.config.playerMaxHealth;
     this.playerMaxHealth = this.config.playerMaxHealth;
+    this.weaponSystem = new WeaponSystem(weaponConfig);
   }
 
   /**
@@ -76,14 +92,122 @@ export class CombatSystem {
       if (this.respawnTimer <= 0) {
         this.respawnPlayer(ship);
       }
+      // Still update weapon system for visual cleanup
+      this.weaponSystem.update(deltaTime);
+      this.updateHitParticles(deltaTime);
       return;
     }
+
+    // Update weapon system
+    this.weaponSystem.update(deltaTime);
+
+    // Check player projectile collisions with enemies
+    this.checkProjectileCollisions(pirates);
 
     // Check collisions with pirates
     this.checkPirateCollisions(ship, pirates, deltaTime);
 
     // Update damage popups
     this.updateDamagePopups(deltaTime);
+
+    // Update hit particles
+    this.updateHitParticles(deltaTime);
+  }
+
+  /**
+   * Player shoots a projectile
+   */
+  public playerShoot(x: number, y: number, angle: number): boolean {
+    return this.weaponSystem.fire(x, y, angle, 'player');
+  }
+
+  /**
+   * Check if player can fire
+   */
+  public canPlayerFire(): boolean {
+    return this.weaponSystem.canPlayerFire();
+  }
+
+  /**
+   * Get player weapon cooldown progress (0-1)
+   */
+  public getWeaponCooldownProgress(): number {
+    return this.weaponSystem.getPlayerCooldownProgress();
+  }
+
+  /**
+   * Check projectile collisions with enemies
+   */
+  private checkProjectileCollisions(pirates: Pirate[]): void {
+    // Filter to active pirates that can be hit
+    const targets = pirates.filter(p => !p.isDestroyed && p.active);
+
+    // Check player projectiles against enemies
+    const hits = this.weaponSystem.checkCollisions(targets, 'player');
+
+    for (const hit of hits) {
+      const pirate = hit.target as Pirate;
+
+      // Deal damage to the pirate
+      pirate.takeDamage(hit.damage);
+
+      // Create damage popup
+      this.createDamagePopup(
+        pirate.position.x,
+        pirate.position.y - 20,
+        hit.damage,
+        '#4af'
+      );
+
+      // Create hit particles
+      this.createHitParticles(
+        hit.projectile.position.x,
+        hit.projectile.position.y,
+        '#4af'
+      );
+
+      // Check if pirate was destroyed
+      if (pirate.isDestroyed) {
+        this.handlePirateDestroyed(pirate);
+      }
+    }
+  }
+
+  /**
+   * Create hit particle effects
+   */
+  private createHitParticles(x: number, y: number, color: string): void {
+    const particleCount = 8;
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (Math.PI * 2 * i) / particleCount + Math.random() * 0.5;
+      const speed = 100 + Math.random() * 150;
+      this.hitParticles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        color,
+        lifetime: 0.3 + Math.random() * 0.2,
+        maxLifetime: 0.5,
+        size: 2 + Math.random() * 3,
+      });
+    }
+  }
+
+  /**
+   * Update hit particles
+   */
+  private updateHitParticles(deltaTime: number): void {
+    for (const particle of this.hitParticles) {
+      particle.x += particle.vx * deltaTime;
+      particle.y += particle.vy * deltaTime;
+      particle.vx *= 0.95;
+      particle.vy *= 0.95;
+      particle.lifetime -= deltaTime;
+    }
+
+    // Remove expired particles
+    this.hitParticles = this.hitParticles.filter(p => p.lifetime > 0);
   }
 
   /**
@@ -166,6 +290,9 @@ export class CombatSystem {
     this.playerHealth -= amount;
     this.invulnerabilityTimer = this.config.invulnerabilityDuration;
 
+    // Sync health percentage to ship for visual effects
+    this.syncHealthToShip(ship);
+
     // Create damage popup
     this.createDamagePopup(ship.position.x, ship.position.y - 30, amount, '#ff4444');
 
@@ -182,6 +309,14 @@ export class CombatSystem {
       this.playerHealth = 0;
       this.handlePlayerDeath(ship);
     }
+  }
+
+  /**
+   * Sync health percentage to ship for visual hull damage effects
+   */
+  private syncHealthToShip(ship: Ship): void {
+    const healthPercent = this.playerHealth / this.playerMaxHealth;
+    ship.setHealthPercent(healthPercent);
   }
 
   /**
@@ -216,6 +351,9 @@ export class CombatSystem {
     ship.position.y = this.respawnPosition.y;
     ship.velocity.set(0, 0);
 
+    // Sync full health to ship
+    this.syncHealthToShip(ship);
+
     // Fire event
     this.fireCombatEvent({
       type: 'player_respawned',
@@ -230,10 +368,11 @@ export class CombatSystem {
   private handlePirateDestroyed(pirate: Pirate): void {
     const loot = pirate.getLootValue();
 
-    // Fire event
+    // Fire event with position so Game can spawn loot drops
     this.fireCombatEvent({
       type: 'pirate_destroyed',
       loot: loot,
+      position: { x: pirate.position.x, y: pirate.position.y },
     });
 
     console.log(`[Combat] Pirate destroyed! Loot: ${loot} credits`);
@@ -306,19 +445,19 @@ export class CombatSystem {
   }
 
   /**
+   * Heal player by specified amount
+   */
+  public healPlayer(amount: number): void {
+    this.playerHealth = Math.min(this.playerMaxHealth, this.playerHealth + amount);
+  }
+
+  /**
    * Set player max health (for upgrades)
    */
   public setPlayerMaxHealth(maxHealth: number): void {
     const healthPercent = this.playerHealth / this.playerMaxHealth;
     this.playerMaxHealth = maxHealth;
     this.playerHealth = Math.floor(maxHealth * healthPercent);
-  }
-
-  /**
-   * Heal the player
-   */
-  public healPlayer(amount: number): void {
-    this.playerHealth = Math.min(this.playerHealth + amount, this.playerMaxHealth);
   }
 
   /**
@@ -361,9 +500,29 @@ export class CombatSystem {
   }
 
   /**
-   * Render combat effects (damage popups)
+   * Render combat effects (projectiles, damage popups, hit particles)
    */
   public render(ctx: CanvasRenderingContext2D, cameraX: number, cameraY: number): void {
+    // Render projectiles
+    this.weaponSystem.render(ctx, cameraX, cameraY);
+
+    // Render hit particles
+    for (const particle of this.hitParticles) {
+      const screenX = particle.x - cameraX;
+      const screenY = particle.y - cameraY;
+      const alpha = particle.lifetime / particle.maxLifetime;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = particle.color;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = particle.color;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, particle.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // Render damage popups
     for (const popup of this.damagePopups) {
       const screenX = popup.x - cameraX;
@@ -490,6 +649,28 @@ export class CombatSystem {
     ctx.fillText('Respawning...', canvasWidth / 2, barY + 25);
 
     ctx.textAlign = 'left';
+  }
+
+  /**
+   * Get weapon system (for external access/upgrades)
+   */
+  public getWeaponSystem(): WeaponSystem {
+    return this.weaponSystem;
+  }
+
+  /**
+   * Update player weapon configuration (for upgrades)
+   */
+  public setPlayerWeaponConfig(config: Partial<WeaponConfig>): void {
+    this.weaponSystem.setPlayerWeaponConfig(config);
+  }
+
+  /**
+   * Clear all projectiles (e.g., on zone change)
+   */
+  public clearProjectiles(): void {
+    this.weaponSystem.clear();
+    this.hitParticles = [];
   }
 
   /**

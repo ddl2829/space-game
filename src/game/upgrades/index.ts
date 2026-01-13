@@ -129,8 +129,6 @@ export { UpgradeShopUI } from '../ui/UpgradeShopUI';
  *     // Update inventory capacity
  *     this.inventory.setMaxWeight(this.shipStats.getStat('cargoCapacity'));
  *
- *     // Update mining system speed
- *     // this.miningSystem.setSpeedMultiplier(this.shipStats.getStat('miningSpeed'));
  *   }
  *
  *   destroy(): void {

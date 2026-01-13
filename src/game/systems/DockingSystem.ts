@@ -57,8 +57,8 @@ export class DockingSystem {
    */
   public update(_deltaTime: number): void {
     if (this.state === 'docked') {
-      // Check for undock key
-      if (this.input.isKeyJustPressed('e')) {
+      // Check for undock key (keyboard or virtual controller)
+      if (this.input.isInteractJustPressed()) {
         this.undock();
       }
       return;
@@ -87,8 +87,8 @@ export class DockingSystem {
         this.callbacks.onApproach?.(this.nearbyStation);
       }
 
-      // Check for dock key
-      if (this.input.isKeyJustPressed('e')) {
+      // Check for dock key (keyboard or virtual controller)
+      if (this.input.isInteractJustPressed()) {
         this.dock(this.nearbyStation);
       }
     } else {

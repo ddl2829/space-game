@@ -19,7 +19,7 @@ export interface Upgrade {
   /** Description shown in the shop */
   description: string;
   /** Category for UI grouping */
-  category: 'cargo' | 'engine' | 'mining' | 'combat';
+  category: 'cargo' | 'engine' | 'combat';
   /** Maximum tier this upgrade can reach */
   maxTier: number;
   /** Cost in credits for each tier (index 0 = tier 1 cost) */
@@ -60,17 +60,18 @@ export const UPGRADES: Record<string, Upgrade> = {
     icon: '>>',
   },
 
-  miningLaser: {
-    id: 'miningLaser',
-    name: 'Mining Laser',
-    description: 'Upgrade mining equipment for faster extraction',
-    category: 'mining',
+  weaponSystem: {
+    id: 'weaponSystem',
+    name: 'Weapon System',
+    description: 'Enhanced weapons: faster fire rate, more damage, multi-shot at max tier',
+    category: 'combat',
     maxTier: 3,
-    costs: [600, 1800, 4500],
+    costs: [1000, 2500, 6000],
     effects: [
-      { stat: 'miningSpeed', valuePerTier: 0.25, isPercentage: true },
+      { stat: 'weaponFireRate', valuePerTier: 1.5, isPercentage: false },  // +1.5 shots/sec per tier
+      { stat: 'weaponDamage', valuePerTier: 10, isPercentage: false },     // +10 damage per tier
     ],
-    icon: '<>',
+    icon: '><',
   },
 
   hullPlating: {
@@ -138,6 +139,5 @@ export const TIER_NAMES = ['I', 'II', 'III', 'IV', 'V'];
 export const CATEGORY_INFO: Record<Upgrade['category'], { name: string; color: string }> = {
   cargo: { name: 'Storage', color: '#6ca' },
   engine: { name: 'Propulsion', color: '#fa6' },
-  mining: { name: 'Mining', color: '#f6a' },
   combat: { name: 'Defense', color: '#a6f' },
 };
