@@ -2,6 +2,9 @@
  * Mission definitions and types for the quest system
  */
 
+import { getWorldGenerator } from '../utils/WorldGenerator';
+import { getStationById } from './stations';
+
 export type MissionType = 'kill_pirates' | 'delivery';
 
 export interface MissionReward {
@@ -20,6 +23,8 @@ export interface DeliveryMission {
   destinationPlanet: string;
   destinationName: string;
   packageName: string;
+  destinationX: number;
+  destinationY: number;
 }
 
 export type MissionObjective = KillPiratesMission | DeliveryMission;
@@ -118,15 +123,38 @@ export const PACKAGE_NAMES = [
   'Ancient Artifacts',
 ];
 
+const MIN_DELIVERY_DISTANCE = 5000; // 5km minimum distance from station
+const SEARCH_RADIUS = 20000; // 20km search radius for planets
+
 /**
- * Planet destinations for delivery missions (must match celestials.ts planet names)
+ * Find valid delivery destinations (planets at least 5km from the station)
  */
-export const DELIVERY_DESTINATIONS = [
-  { planetName: 'Haven Prime', displayName: 'Haven Prime' },
-  { planetName: 'Aurelia', displayName: 'Aurelia' },
-  { planetName: 'Magnus', displayName: 'Magnus' },
-  { planetName: 'Glacius', displayName: 'Glacius' },
-];
+function findDeliveryDestinations(stationX: number, stationY: number): { name: string; x: number; y: number; distance: number }[] {
+  const worldGen = getWorldGenerator();
+  const objects = worldGen.getObjectsInRange(stationX, stationY, SEARCH_RADIUS);
+
+  const validPlanets: { name: string; x: number; y: number; distance: number }[] = [];
+
+  for (const planet of objects.planets) {
+    const dx = planet.x - stationX;
+    const dy = planet.y - stationY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance >= MIN_DELIVERY_DISTANCE) {
+      validPlanets.push({
+        name: planet.name,
+        x: planet.x,
+        y: planet.y,
+        distance,
+      });
+    }
+  }
+
+  // Sort by distance (closer planets first for easier missions)
+  validPlanets.sort((a, b) => a.distance - b.distance);
+
+  return validPlanets;
+}
 
 /**
  * Generate a unique mission ID
@@ -163,16 +191,29 @@ export function generateKillPiratesMission(sourceStationId: string): Mission {
 
 /**
  * Generate a random delivery mission
+ * Returns null if no valid destinations found
  */
-export function generateDeliveryMission(sourceStationId: string): Mission {
+export function generateDeliveryMission(sourceStationId: string): Mission | null {
+  const station = getStationById(sourceStationId);
+  if (!station) {
+    console.warn(`[Missions] Station not found: ${sourceStationId}`);
+    return null;
+  }
+
+  const destinations = findDeliveryDestinations(station.x, station.y);
+  if (destinations.length === 0) {
+    console.warn(`[Missions] No valid delivery destinations found for station ${sourceStationId}`);
+    return null;
+  }
+
   const template = DELIVERY_TEMPLATES[Math.floor(Math.random() * DELIVERY_TEMPLATES.length)];
   const packageName = PACKAGE_NAMES[Math.floor(Math.random() * PACKAGE_NAMES.length)];
 
-  // Pick a random destination
-  const destination = DELIVERY_DESTINATIONS[Math.floor(Math.random() * DELIVERY_DESTINATIONS.length)];
+  // Pick a random destination from available planets
+  const destination = destinations[Math.floor(Math.random() * destinations.length)];
 
-  // Vary reward based on destination distance (further = more reward)
-  const distanceBonus = Math.floor(Math.random() * 200);
+  // Reward scales with distance (100 credits per 1km)
+  const distanceBonus = Math.floor(destination.distance / 100);
   const reward = template.baseReward + distanceBonus;
 
   return {
@@ -180,12 +221,14 @@ export function generateDeliveryMission(sourceStationId: string): Mission {
     title: template.titleTemplate,
     description: template.descriptionTemplate
       .replace('{package}', packageName)
-      .replace('{destination}', destination.displayName),
+      .replace('{destination}', destination.name),
     objective: {
       type: 'delivery',
-      destinationPlanet: destination.planetName,
-      destinationName: destination.displayName,
+      destinationPlanet: destination.name,
+      destinationName: destination.name,
       packageName,
+      destinationX: destination.x,
+      destinationY: destination.y,
     },
     reward: { credits: reward },
     sourceStationId,
@@ -204,7 +247,13 @@ export function generateStationMissions(stationId: string, count: number = 3): M
     if (Math.random() < 0.5) {
       missions.push(generateKillPiratesMission(stationId));
     } else {
-      missions.push(generateDeliveryMission(stationId));
+      const deliveryMission = generateDeliveryMission(stationId);
+      if (deliveryMission) {
+        missions.push(deliveryMission);
+      } else {
+        // Fall back to kill mission if no delivery destinations available
+        missions.push(generateKillPiratesMission(stationId));
+      }
     }
   }
 

@@ -14,10 +14,10 @@ export interface EnemySpawnerConfig {
 }
 
 const DEFAULT_SPAWNER_CONFIG: EnemySpawnerConfig = {
-  spawnRadius: 600,
-  despawnRadius: 1000,
-  minSpawnDistance: 400,
-  spawnCheckInterval: 2.0,
+  spawnRadius: 1200,
+  despawnRadius: 1500,
+  minSpawnDistance: 900,
+  spawnCheckInterval: 3.0,
 };
 
 export class EnemySpawner {
@@ -252,5 +252,24 @@ export class EnemySpawner {
       const distance = Math.sqrt(dx * dx + dy * dy);
       return distance <= warningRadius && (p.state === 'chase' || p.state === 'attack');
     });
+  }
+
+  /**
+   * Make all pirates within a radius passive (for respawn protection)
+   * Passive pirates will fly away and ignore the player unless attacked
+   */
+  public makePiratesPassiveNear(x: number, y: number, radius: number = 800): void {
+    for (const pirate of this.pirates) {
+      if (pirate.isDestroyed || !pirate.active) continue;
+
+      const dx = pirate.position.x - x;
+      const dy = pirate.position.y - y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance <= radius) {
+        pirate.setPassive(true);
+        console.log(`[EnemySpawner] Made pirate passive at distance ${distance.toFixed(0)}`);
+      }
+    }
   }
 }

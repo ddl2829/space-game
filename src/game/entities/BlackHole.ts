@@ -3,6 +3,7 @@
  */
 
 export interface BlackHoleConfig {
+  id?: string; // optional custom id for map offerings
   x: number;
   y: number;
   radius: number; // event horizon
@@ -40,7 +41,7 @@ export class BlackHole {
   private lensingPhase: number = 0;
 
   constructor(config: BlackHoleConfig) {
-    this.id = `blackhole_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    this.id = config.id || `blackhole_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     this.name = config.name ?? 'Singularity';
     this.x = config.x;
     this.y = config.y;

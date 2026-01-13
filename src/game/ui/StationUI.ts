@@ -31,7 +31,7 @@ export class StationUI {
   private allMarkets: Map<string, Market> = new Map();
   private allStations: Map<string, Station> = new Map();
   private callbacks: StationUICallbacks = {};
-  private activeTab: 'trade' | 'market' | 'maps' | 'missions' = 'trade';
+  private activeTab: 'trade' | 'market' | 'maps' | 'missions' | 'menu' = 'trade';
   private saveSystem: SaveSystem | null = null;
   private missionSystem: MissionSystem | null = null;
 
@@ -161,6 +161,8 @@ export class StationUI {
       tabContent = this.renderMapsSection(inventoryState.credits);
     } else if (this.activeTab === 'missions') {
       tabContent = this.renderMissionsSection();
+    } else if (this.activeTab === 'menu') {
+      tabContent = this.renderMenuSection();
     }
 
     this.contentPanel.innerHTML = `
@@ -229,6 +231,16 @@ export class StationUI {
           transition: all 0.2s;
           ${this.activeTab === 'missions' ? activeStyle : inactiveStyle}
         ">MISSIONS</button>
+        <button class="tab-btn" data-tab="menu" style="
+          padding: 12px 24px;
+          border: none;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 600;
+          transition: all 0.2s;
+          margin-left: auto;
+          ${this.activeTab === 'menu' ? activeStyle : inactiveStyle}
+        ">MENU</button>
       </div>
     `;
   }
@@ -771,6 +783,53 @@ export class StationUI {
     `;
   }
 
+  private renderMenuSection(): string {
+    return `
+      <div style="margin-bottom: 25px;">
+        <h2 style="
+          color: #fff;
+          font-size: 18px;
+          margin: 0 0 15px 0;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        ">
+          <span style="color: #0f3460;">&#9632;</span> Menu
+        </h2>
+        <p style="color: #888; font-size: 13px; margin-bottom: 25px;">
+          Game options and settings.
+        </p>
+
+        <div style="
+          padding: 20px;
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          border-radius: 8px;
+        ">
+          <h3 style="color: #ef4444; font-size: 16px; margin: 0 0 10px 0;">
+            Danger Zone
+          </h3>
+          <p style="color: #888; font-size: 13px; margin-bottom: 15px;">
+            This will permanently delete all your progress including credits, inventory, upgrades, and discovered locations.
+          </p>
+          <button id="reset-progress-btn" style="
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+          ">
+            Reset Progress
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
   private renderHeader(): string {
     return `
       <div style="
@@ -1027,13 +1086,31 @@ export class StationUI {
     const tabBtns = this.contentPanel.querySelectorAll('.tab-btn');
     tabBtns.forEach((btn) => {
       btn.addEventListener('click', (e) => {
-        const tab = (e.target as HTMLElement).dataset.tab as 'trade' | 'market' | 'maps' | 'missions';
+        const tab = (e.target as HTMLElement).dataset.tab as 'trade' | 'market' | 'maps' | 'missions' | 'menu';
         if (tab && tab !== this.activeTab) {
           this.activeTab = tab;
           this.render();
         }
       });
     });
+
+    // Reset progress button
+    const resetBtn = this.contentPanel.querySelector('#reset-progress-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        this.handleResetProgress();
+      });
+
+      resetBtn.addEventListener('mouseenter', (e) => {
+        (e.target as HTMLElement).style.transform = 'scale(1.05)';
+        (e.target as HTMLElement).style.boxShadow = '0 6px 20px rgba(220, 38, 38, 0.5)';
+      });
+
+      resetBtn.addEventListener('mouseleave', (e) => {
+        (e.target as HTMLElement).style.transform = 'scale(1)';
+        (e.target as HTMLElement).style.boxShadow = 'none';
+      });
+    }
 
     // Upgrades button
     const upgradesBtn = this.contentPanel.querySelector('#upgrades-btn');
@@ -1288,6 +1365,28 @@ export class StationUI {
       this.flashCredits();
       this.callbacks.onCollectReward?.(missionId);
       this.refresh();
+    }
+  }
+
+  private handleResetProgress(): void {
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      'Are you sure you want to reset all progress?\n\n' +
+      'This will delete:\n' +
+      '- All credits\n' +
+      '- All inventory items\n' +
+      '- All upgrades\n' +
+      '- All discovered locations\n' +
+      '- All mission progress\n\n' +
+      'This action cannot be undone!'
+    );
+
+    if (confirmed) {
+      // Delete save data from localStorage
+      localStorage.removeItem('space-game-save');
+
+      // Refresh the page to restart the game
+      window.location.reload();
     }
   }
 

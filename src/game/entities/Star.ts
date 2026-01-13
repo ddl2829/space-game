@@ -3,6 +3,7 @@
  */
 
 export interface StarConfig {
+  id?: string; // optional custom id for map offerings
   x: number;
   y: number;
   radius: number;
@@ -37,7 +38,7 @@ export class Star {
   private flareIntensity: number = 0;
 
   constructor(config: StarConfig) {
-    this.id = `star_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    this.id = config.id || `star_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     this.name = config.name ?? 'Unknown Star';
     this.x = config.x;
     this.y = config.y;

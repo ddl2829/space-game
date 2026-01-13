@@ -6,7 +6,7 @@
 import { Entity } from './Entity';
 import { Vector2 } from '../../utils/Vector2';
 
-export type PirateState = 'patrol' | 'chase' | 'attack' | 'flee';
+export type PirateState = 'patrol' | 'chase' | 'attack' | 'flee' | 'passive';
 
 export interface PirateConfig {
   maxHealth: number;
@@ -50,6 +50,10 @@ export class Pirate extends Entity {
 
   // Target tracking
   private targetPosition: Vector2 | null = null;
+
+  // Passive mode - pirate ignores player unless attacked
+  private isPassive: boolean = false;
+  private passiveDirection: Vector2 | null = null;
 
   // Visual properties
   private size: number = 18;
@@ -101,6 +105,9 @@ export class Pirate extends Entity {
         break;
       case 'flee':
         this.updateFlee(deltaTime);
+        break;
+      case 'passive':
+        this.updatePassive(deltaTime);
         break;
     }
 
@@ -221,6 +228,22 @@ export class Pirate extends Entity {
   }
 
   /**
+   * Passive state - fly away and ignore player unless attacked
+   */
+  private updatePassive(deltaTime: number): void {
+    // Initialize passive direction if not set
+    if (!this.passiveDirection) {
+      // Pick a random direction to fly away
+      const angle = Math.random() * Math.PI * 2;
+      this.passiveDirection = new Vector2(Math.cos(angle), Math.sin(angle));
+    }
+
+    // Fly in the passive direction at moderate speed
+    const flyTarget = this.position.added(this.passiveDirection.multiplied(500));
+    this.moveTowards(flyTarget, deltaTime, 0.6);
+  }
+
+  /**
    * Move towards a target position
    */
   private moveTowards(target: Vector2, deltaTime: number, speedMultiplier: number): void {
@@ -304,6 +327,14 @@ export class Pirate extends Entity {
     this.health -= amount;
     this.damageFlashTimer = 0.15;
 
+    // Being attacked removes passive mode - pirate becomes hostile
+    if (this.isPassive) {
+      this.isPassive = false;
+      this.passiveDirection = null;
+      this.setState('chase');
+      console.log('[Pirate] Attacked while passive, now hostile!');
+    }
+
     if (this.health <= 0) {
       this.health = 0;
       this.isDestroyed = true;
@@ -312,6 +343,25 @@ export class Pirate extends Entity {
     } else if (this.health / this.maxHealth < this.config.fleeHealthThreshold) {
       this.setState('flee');
     }
+  }
+
+  /**
+   * Set pirate to passive mode (ignores player unless attacked)
+   */
+  public setPassive(passive: boolean): void {
+    this.isPassive = passive;
+    if (passive) {
+      this.setState('passive');
+      this.targetPosition = null;
+      this.passiveDirection = null;
+    }
+  }
+
+  /**
+   * Check if pirate is in passive mode
+   */
+  public getIsPassive(): boolean {
+    return this.isPassive;
   }
 
   /**

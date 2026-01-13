@@ -32,7 +32,9 @@ import {
 
 // Celestial system imports (Sprint 5)
 import { CelestialSystem } from './systems/CelestialSystem';
-import { SAFE_ZONE_CELESTIALS, FRONTIER_CELESTIALS } from '../data/celestials';
+
+// Procedural generation imports
+import { getWorldGenerator, WorldGenerator, type WarpGateConfig } from '../utils/WorldGenerator';
 
 // Mission system imports (Sprint 6)
 import { MissionSystem } from './systems/MissionSystem';
@@ -139,6 +141,18 @@ export class Game {
   /** Mission system for quests */
   private missionSystem!: MissionSystem;
 
+  /** Procedural world generator */
+  private worldGenerator: WorldGenerator;
+
+  /** Tracked warp gates from procedural generation */
+  private warpGates: WarpGateConfig[] = [];
+
+  /** Set of loaded celestial IDs to prevent duplicates */
+  private loadedCelestialIds: Set<string> = new Set();
+
+  /** Set of loaded station IDs to prevent duplicates */
+  private loadedStationIds: Set<string> = new Set();
+
   /** Whether player is currently docked */
   private isDocked: boolean = false;
 
@@ -178,6 +192,9 @@ export class Game {
 
     // Initialize POI markers
     this.poiMarkers = new POIMarkers();
+
+    // Initialize procedural world generator
+    this.worldGenerator = getWorldGenerator();
 
     // Initialize virtual controller for mobile/touch
     this.virtualController = new VirtualController({
@@ -340,9 +357,16 @@ export class Game {
       onDock: (station) => {
         const market = this.markets.get(station.id);
         if (market) {
-          // Auto-discover station when docking
+          // Auto-discover station when docking and award credits
           if (this.saveSystem.discoverLocation(station.id)) {
-            console.log(`[Game] Discovered ${station.name}!`);
+            const reward = this.calculateDiscoveryReward(station.x, station.y);
+            this.inventory.addCredits(reward);
+            console.log(`[Game] Discovered ${station.name}! +${reward} CR`);
+            this.showMissionNotification(
+              `Discovered: ${station.name}`,
+              `+${reward} CR`,
+              '#fbbf24'
+            );
           }
           this.stationUI.show(station, market);
           this.isDocked = true;
@@ -456,7 +480,13 @@ export class Game {
           break;
         case 'player_respawned':
           console.log('[Game] Player respawned');
-          // Enemies are already cleared by respawn process
+          // Make nearby pirates passive so they don't immediately attack
+          // They will fly away and ignore the player unless shot at
+          this.enemySpawner.makePiratesPassiveNear(
+            this.ship.position.x,
+            this.ship.position.y,
+            1000 // Large radius for respawn protection
+          );
           break;
         case 'pirate_destroyed':
           // Spawn random loot drops at pirate's position
@@ -494,24 +524,68 @@ export class Game {
 
   /**
    * Initializes the celestial system (Sprint 5).
+   * Now uses procedural generation with chunk-based streaming.
    */
   private initializeCelestialSystem(): void {
     this.celestialSystem = new CelestialSystem();
 
-    // Add safe zone celestials
-    for (const planet of SAFE_ZONE_CELESTIALS.planets) {
-      this.celestialSystem.addPlanet(planet);
+    // Load initial chunks around player spawn (0, 0)
+    this.loadChunksAroundPosition(0, 0);
+  }
+
+  /**
+   * Load procedurally generated content from chunks around a position.
+   */
+  private loadChunksAroundPosition(x: number, y: number): void {
+    const objects = this.worldGenerator.getObjectsInRange(x, y);
+
+    // Add planets that haven't been loaded yet
+    for (const planetConfig of objects.planets) {
+      if (planetConfig.id && !this.loadedCelestialIds.has(planetConfig.id)) {
+        this.celestialSystem.addPlanet(planetConfig);
+        this.loadedCelestialIds.add(planetConfig.id);
+      }
     }
 
-    // Add frontier celestials
-    for (const planet of FRONTIER_CELESTIALS.planets) {
-      this.celestialSystem.addPlanet(planet);
+    // Add stars that haven't been loaded yet
+    for (const starConfig of objects.stars) {
+      if (starConfig.id && !this.loadedCelestialIds.has(starConfig.id)) {
+        this.celestialSystem.addStar(starConfig);
+        this.loadedCelestialIds.add(starConfig.id);
+      }
     }
-    for (const star of FRONTIER_CELESTIALS.stars) {
-      this.celestialSystem.addStar(star);
+
+    // Add black holes that haven't been loaded yet
+    for (const blackHoleConfig of objects.blackHoles) {
+      if (blackHoleConfig.id && !this.loadedCelestialIds.has(blackHoleConfig.id)) {
+        this.celestialSystem.addBlackHole(blackHoleConfig);
+        this.loadedCelestialIds.add(blackHoleConfig.id);
+      }
     }
-    for (const blackHole of FRONTIER_CELESTIALS.blackHoles) {
-      this.celestialSystem.addBlackHole(blackHole);
+
+    // Add stations that haven't been loaded yet
+    for (const stationConfig of objects.stations) {
+      if (!this.loadedStationIds.has(stationConfig.id)) {
+        const station = new Station(stationConfig);
+        this.stations.push(station);
+        this.markets.set(stationConfig.id, new Market(stationConfig.id, stationConfig.initialSupply));
+        this.loadedStationIds.add(stationConfig.id);
+        // Update docking system with new stations
+        this.dockingSystem.setStations(this.stations);
+        // Update station UI with new markets/stations
+        const stationMap = new Map<string, Station>();
+        for (const s of this.stations) {
+          stationMap.set(s.id, s);
+        }
+        this.stationUI.setAllMarketsAndStations(this.markets, stationMap);
+      }
+    }
+
+    // Track warp gates for interaction
+    for (const warpGateConfig of objects.warpGates) {
+      if (!this.warpGates.some(wg => wg.id === warpGateConfig.id)) {
+        this.warpGates.push(warpGateConfig);
+      }
     }
   }
 
@@ -737,6 +811,43 @@ export class Game {
   }
 
   /**
+   * Checks if player is near a procedural warp gate and teleports them.
+   */
+  private checkWarpGateInteraction(): void {
+    if (this.isDocked) return;
+
+    const interactionRadius = 100;
+    for (const warpGate of this.warpGates) {
+      const dx = this.ship.position.x - warpGate.x;
+      const dy = this.ship.position.y - warpGate.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < interactionRadius) {
+        console.log(`[Game] Warping through ${warpGate.name}`);
+
+        // Teleport ship to exit point
+        this.ship.position.x = warpGate.exitX;
+        this.ship.position.y = warpGate.exitY;
+        this.ship.velocity.set(0, 0);
+
+        // Clear enemies when warping
+        this.enemySpawner.clear();
+
+        // Re-initialize asteroids at new location
+        this.asteroidSpawner.initialize(this.ship.position.x, this.ship.position.y);
+
+        // Load chunks at new location
+        this.loadChunksAroundPosition(warpGate.exitX, warpGate.exitY);
+
+        // Force zone update
+        this.zoneSystem.update(this.ship.position.x, this.ship.position.y, 0);
+
+        break;
+      }
+    }
+  }
+
+  /**
    * Handles window resize events.
    */
   private handleResize(): void {
@@ -837,6 +948,9 @@ export class Game {
     // Update ship movement
     this.ship.update(deltaTime);
 
+    // Stream in new chunks based on player position (procedural generation)
+    this.loadChunksAroundPosition(this.ship.position.x, this.ship.position.y);
+
     // Update celestial bodies
     this.celestialSystem.update(deltaTime);
 
@@ -891,7 +1005,12 @@ export class Game {
       // Clear enemies and reinitialize asteroids
       this.enemySpawner.clear();
       this.asteroidSpawner.initialize(exit.x, exit.y);
+      // Load chunks at new location
+      this.loadChunksAroundPosition(exit.x, exit.y);
     }
+
+    // Check warp gate interaction
+    this.checkWarpGateInteraction();
 
     // Update camera to follow ship
     this.camera.update(deltaTime);
@@ -1206,32 +1325,70 @@ export class Game {
 
     // Build POI list for edge-of-screen markers (only discovered locations)
     const pois: POI[] = [];
+    const markerRange = 3000; // 3km - only show markers within this range (unless enemy or mission target)
 
-    // Add discovered stations
-    for (const station of this.stations) {
-      if (this.saveSystem.isLocationDiscovered(station.id)) {
-        pois.push({
-          x: station.x,
-          y: station.y,
-          type: 'station',
-          name: station.name,
-          color: '#4ade80',
+    // Helper to check if POI is within range
+    const isWithinRange = (x: number, y: number): boolean => {
+      const dx = x - this.ship.position.x;
+      const dy = y - this.ship.position.y;
+      return Math.sqrt(dx * dx + dy * dy) <= markerRange;
+    };
+
+    // Get active delivery mission destinations with coordinates (shown regardless of distance)
+    const deliveryDestinations: { name: string; x: number; y: number }[] = [];
+    for (const mission of this.missionSystem.getActiveMissions()) {
+      if (mission.objective.type === 'delivery' && !mission.isComplete) {
+        const obj = mission.objective;
+        deliveryDestinations.push({
+          name: obj.destinationPlanet,
+          x: obj.destinationX,
+          y: obj.destinationY,
         });
       }
     }
 
-    // Add jump gates (always visible - they're navigation aids)
-    for (const gate of this.jumpGates) {
-      pois.push({
-        x: gate.position.x,
-        y: gate.position.y,
-        type: 'gate',
-        name: 'Jump Gate',
-        color: '#22d3ee',
-      });
+    // Add discovered stations (only within 3km)
+    for (const station of this.stations) {
+      if (this.saveSystem.isLocationDiscovered(station.id)) {
+        if (isWithinRange(station.x, station.y)) {
+          pois.push({
+            x: station.x,
+            y: station.y,
+            type: 'station',
+            name: station.name,
+            color: '#4ade80',
+          });
+        }
+      }
     }
 
-    // Add nearby enemies (always visible - tactical awareness)
+    // Add jump gates (only within 3km)
+    for (const gate of this.jumpGates) {
+      if (isWithinRange(gate.position.x, gate.position.y)) {
+        pois.push({
+          x: gate.position.x,
+          y: gate.position.y,
+          type: 'gate',
+          name: 'Jump Gate',
+          color: '#22d3ee',
+        });
+      }
+    }
+
+    // Add procedural warp gates (only within 3km)
+    for (const warpGate of this.warpGates) {
+      if (isWithinRange(warpGate.x, warpGate.y)) {
+        pois.push({
+          x: warpGate.x,
+          y: warpGate.y,
+          type: 'warpgate',
+          name: warpGate.name,
+          color: '#34d399',
+        });
+      }
+    }
+
+    // Add nearby enemies (always visible - tactical awareness, no distance limit)
     for (const pirate of this.enemySpawner.getPirates()) {
       pois.push({
         x: pirate.position.x,
@@ -1241,13 +1398,65 @@ export class Game {
       });
     }
 
-    // Add discovered celestial POIs
+    // Add celestial POIs (only within 3km, or if it's a delivery mission destination)
     const celestialPOIs = this.celestialSystem.getAllPOIs();
+
     for (const poi of celestialPOIs) {
       // Map celestial names to location IDs
       const locationId = this.getLocationIdFromPOI(poi);
-      if (locationId && this.saveSystem.isLocationDiscovered(locationId)) {
-        pois.push(poi);
+      if (!locationId) continue;
+
+      const isDiscovered = this.saveSystem.isLocationDiscovered(locationId);
+      const isMissionDestination = poi.name ? deliveryDestinations.some(d => d.name === poi.name) : false;
+      const withinRange = isWithinRange(poi.x, poi.y);
+
+      if (isDiscovered) {
+        // Show discovered POIs only within range
+        if (withinRange) {
+          pois.push(poi);
+        }
+      } else if (withinRange || isMissionDestination) {
+        // Show undiscovered POIs within 3km OR if it's a mission destination (as amber "???")
+        pois.push({
+          x: poi.x,
+          y: poi.y,
+          type: 'undiscovered',
+          name: '???',
+          color: '#fbbf24', // Amber/gold for undiscovered
+        });
+      }
+    }
+
+    // Also show undiscovered stations within range
+    for (const station of this.stations) {
+      if (!this.saveSystem.isLocationDiscovered(station.id)) {
+        if (isWithinRange(station.x, station.y)) {
+          pois.push({
+            x: station.x,
+            y: station.y,
+            type: 'undiscovered',
+            name: '???',
+            color: '#fbbf24',
+          });
+        }
+      }
+    }
+
+    // Add delivery mission destinations directly (in case planet not loaded in celestialSystem)
+    // These show as amber "???" markers regardless of distance
+    for (const dest of deliveryDestinations) {
+      // Check if we already added this POI from celestialPOIs
+      const alreadyAdded = pois.some(p =>
+        Math.abs(p.x - dest.x) < 10 && Math.abs(p.y - dest.y) < 10
+      );
+      if (!alreadyAdded) {
+        pois.push({
+          x: dest.x,
+          y: dest.y,
+          type: 'undiscovered',
+          name: '???',
+          color: '#fbbf24',
+        });
       }
     }
 
@@ -1312,22 +1521,49 @@ export class Game {
   private getLocationIdFromPOI(poi: POI): string | null {
     if (!poi.name) return null;
 
-    // Map celestial names to location IDs
-    const nameToIdMap: Record<string, string> = {
-      'Haven Prime': 'planet_haven_prime',
-      'Aurelia': 'planet_aurelia',
-      'Magnus': 'planet_magnus',
-      'Glacius': 'planet_glacius',
-      'Inferno': 'star_inferno',
-      'Void Gate Alpha': 'blackhole_void_gate_alpha',
-      'Void Gate Beta': 'blackhole_void_gate_beta',
-    };
+    // For procedurally generated content, use type + name as ID
+    // This works with the chunk-based generation where IDs follow patterns like:
+    // planet_0_0_haven_prime, star_1_-1_solaris, etc.
+    const normalizedName = poi.name.toLowerCase().replace(/\s+/g, '_');
 
-    return nameToIdMap[poi.name] || null;
+    switch (poi.type) {
+      case 'planet':
+        return `planet_${normalizedName}`;
+      case 'star':
+        return `star_${normalizedName}`;
+      case 'blackhole':
+        return `blackhole_${normalizedName}`;
+      case 'station':
+        return `station_${normalizedName}`;
+      case 'warpgate':
+        return `warpgate_${normalizedName}`;
+      default:
+        return `celestial_${normalizedName}`;
+    }
+  }
+
+  /**
+   * Calculate discovery reward based on distance from origin.
+   * Farther locations are worth more credits.
+   */
+  private calculateDiscoveryReward(x: number, y: number): number {
+    const distFromOrigin = Math.sqrt(x * x + y * y);
+
+    // Base reward scales with distance
+    // Safe Zone (0-2000): 50-150 credits
+    // Frontier (2000+): 150-500+ credits
+    const baseReward = 50;
+    const distanceMultiplier = 0.1; // 0.1 credits per unit distance
+
+    const reward = Math.round(baseReward + distFromOrigin * distanceMultiplier);
+
+    // Cap at reasonable maximum
+    return Math.min(reward, 1000);
   }
 
   /**
    * Check if player is close to any celestial bodies and auto-discover them.
+   * Awards credits based on distance from origin.
    */
   private checkCelestialDiscoveries(): void {
     const playerX = this.ship.position.x;
@@ -1343,7 +1579,21 @@ export class Game {
       if (dist < discoveryRange) {
         const locationId = this.getLocationIdFromPOI(poi);
         if (locationId && this.saveSystem.discoverLocation(locationId)) {
-          console.log(`[Game] Discovered ${poi.name}!`);
+          // Calculate and award discovery bonus
+          const reward = this.calculateDiscoveryReward(poi.x, poi.y);
+          this.inventory.addCredits(reward);
+
+          console.log(`[Game] Discovered ${poi.name}! +${reward} CR`);
+
+          // Show discovery notification
+          this.showMissionNotification(
+            `Discovered: ${poi.name}`,
+            `+${reward} CR`,
+            '#fbbf24' // Amber/gold color for discoveries
+          );
+
+          // Save game after discovery
+          this.saveSystem.save();
         }
       }
     }

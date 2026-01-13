@@ -18,6 +18,7 @@ export interface OrbitingStationConfig {
 }
 
 export interface PlanetConfig {
+  id?: string; // optional custom id for map offerings
   x: number;
   y: number;
   radius: number;
@@ -57,7 +58,7 @@ export class Planet {
   private rotationSpeed: number = 0.02; // slow planetary rotation
 
   constructor(config: PlanetConfig) {
-    this.id = `planet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    this.id = config.id || `planet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     this.name = config.name;
     this.x = config.x;
     this.y = config.y;

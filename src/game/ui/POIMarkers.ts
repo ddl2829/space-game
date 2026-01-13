@@ -1,9 +1,10 @@
 export interface POI {
   x: number;
   y: number;
-  type: 'station' | 'gate' | 'enemy' | 'asteroid';
+  type: 'station' | 'gate' | 'enemy' | 'asteroid' | 'undiscovered' | 'planet' | 'star' | 'blackhole' | 'warpgate';
   name?: string;
   color: string;
+  hasMission?: boolean; // POIs with missions are always shown regardless of distance
 }
 
 const TYPE_COLORS: Record<POI['type'], string> = {
@@ -11,6 +12,11 @@ const TYPE_COLORS: Record<POI['type'], string> = {
   gate: '#22d3ee',
   enemy: '#ef4444',
   asteroid: '#a8a29e',
+  undiscovered: '#fbbf24', // Amber/gold for undiscovered POIs
+  planet: '#60a5fa', // Blue for planets
+  star: '#fbbf24', // Yellow/amber for stars
+  blackhole: '#a855f7', // Purple for black holes
+  warpgate: '#34d399', // Teal for warp gates
 };
 
 export class POIMarkers {
@@ -240,6 +246,62 @@ export class POIMarkers {
         // Circle (asteroid icon)
         ctx.beginPath();
         ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+
+      case 'undiscovered':
+        // Question mark (unknown/undiscovered icon)
+        ctx.font = `bold ${size + 4}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', 0, 1);
+        break;
+
+      case 'planet':
+        // Circle with ring (planet icon)
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(0, 0, size * 0.8, size * 0.25, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+
+      case 'star':
+        // Star burst shape
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const angle = (i / 8) * Math.PI * 2;
+          const r = i % 2 === 0 ? size / 2 : size / 4;
+          const px = Math.cos(angle) * r;
+          const py = Math.sin(angle) * r;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+        break;
+
+      case 'blackhole':
+        // Spiral/vortex shape
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 4, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'warpgate':
+        // Portal/gate shape (two vertical lines with arc)
+        ctx.beginPath();
+        ctx.moveTo(-size / 2, -size / 2);
+        ctx.lineTo(-size / 2, size / 2);
+        ctx.moveTo(size / 2, -size / 2);
+        ctx.lineTo(size / 2, size / 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 3, 0, Math.PI * 2);
         ctx.stroke();
         break;
     }

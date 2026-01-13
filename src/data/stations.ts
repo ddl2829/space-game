@@ -2,6 +2,8 @@
  * Station definitions for the trading system
  */
 
+import { getGeneratedStations } from './celestials';
+
 export interface StationConfig {
   id: string;
   name: string;
@@ -13,36 +15,10 @@ export interface StationConfig {
 }
 
 /**
- * Default stations in the game world
+ * Stations generated procedurally from the world generator
+ * (imported from celestials.ts to ensure same world generation)
  */
-export const STATIONS: StationConfig[] = [
-  {
-    id: 'station_alpha',
-    name: 'Alpha Station',
-    x: 500,
-    y: -300,
-    size: 80,
-    dockingRange: 150,
-    initialSupply: {
-      iron: 50,
-      titanium: 20,
-      platinum: 5,
-    },
-  },
-  {
-    id: 'station_beta',
-    name: 'Beta Outpost',
-    x: -800,
-    y: 600,
-    size: 60,
-    dockingRange: 120,
-    initialSupply: {
-      iron: 30,
-      titanium: 40,
-      platinum: 10,
-    },
-  },
-];
+export const STATIONS: StationConfig[] = getGeneratedStations();
 
 /**
  * Get a station config by ID

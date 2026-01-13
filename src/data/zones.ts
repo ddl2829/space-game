@@ -45,15 +45,32 @@ export const FRONTIER_ZONE: Zone = {
   backgroundColor: '#0c0812',
   resourceMultiplier: 1.5,
   priceMultiplier: 1.5,
-  enemySpawnRate: 1,
-  maxEnemies: 5,
+  enemySpawnRate: 0.15,
+  maxEnemies: 3,
   description: 'Uncharted territory with rich asteroid fields. Pirates patrol these sectors.',
+};
+
+/**
+ * Deep Space - Remote, high-value exploration zone
+ * Far from civilization with rare discoveries and extreme dangers
+ */
+export const DEEP_SPACE_ZONE: Zone = {
+  id: 'deep_space',
+  name: 'Deep Space',
+  dangerLevel: 3,
+  bounds: { x: -16000, y: -16000, width: 32000, height: 32000 },
+  backgroundColor: '#060410',
+  resourceMultiplier: 2.0,
+  priceMultiplier: 2.0,
+  enemySpawnRate: 0.25,
+  maxEnemies: 5,
+  description: 'The void beyond known space. Rich rewards await those brave enough to venture here.',
 };
 
 /**
  * All zones in the game, ordered by danger level
  */
-export const ZONES: Zone[] = [SAFE_ZONE, FRONTIER_ZONE];
+export const ZONES: Zone[] = [SAFE_ZONE, FRONTIER_ZONE, DEEP_SPACE_ZONE];
 
 /**
  * Get a zone by its ID
@@ -64,7 +81,7 @@ export function getZoneById(id: string): Zone | undefined {
 
 /**
  * Get the zone at a given world position
- * Checks zones from most specific (highest danger) to least specific
+ * Checks zones from innermost to outermost
  */
 export function getZoneAtPosition(x: number, y: number): Zone {
   // Check Safe Zone first (inner zone takes priority)
@@ -72,8 +89,13 @@ export function getZoneAtPosition(x: number, y: number): Zone {
     return SAFE_ZONE;
   }
 
-  // Default to Frontier for anything outside Safe Zone
-  return FRONTIER_ZONE;
+  // Check Frontier Zone (middle zone)
+  if (isPointInZone(x, y, FRONTIER_ZONE)) {
+    return FRONTIER_ZONE;
+  }
+
+  // Default to Deep Space for anything beyond Frontier
+  return DEEP_SPACE_ZONE;
 }
 
 /**

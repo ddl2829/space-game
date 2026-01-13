@@ -201,6 +201,27 @@ export class CelestialSystem {
   }
 
   /**
+   * Check if a planet with given ID exists
+   */
+  public hasPlanet(id: string): boolean {
+    return this.planets.some((p) => p.id === id);
+  }
+
+  /**
+   * Check if a star with given ID exists
+   */
+  public hasStar(id: string): boolean {
+    return this.stars.some((s) => s.id === id);
+  }
+
+  /**
+   * Check if a black hole with given ID exists
+   */
+  public hasBlackHole(id: string): boolean {
+    return this.blackHoles.some((b) => b.id === id);
+  }
+
+  /**
    * Get all POIs for minimap/markers
    */
   public getAllPOIs(): POI[] {
@@ -211,7 +232,7 @@ export class CelestialSystem {
       pois.push({
         x: planet.x,
         y: planet.y,
-        type: 'station', // Using station type for planets since POI doesn't have 'planet'
+        type: 'planet',
         name: planet.name,
         color: '#60a5fa', // Blue for planets
       });
@@ -222,7 +243,7 @@ export class CelestialSystem {
       pois.push({
         x: star.x,
         y: star.y,
-        type: 'enemy', // Using enemy type (red) for dangerous stars
+        type: 'star',
         name: star.name,
         color: '#fbbf24', // Amber for stars
       });
@@ -233,7 +254,7 @@ export class CelestialSystem {
       pois.push({
         x: blackHole.x,
         y: blackHole.y,
-        type: 'gate', // Using gate type for black holes (they teleport you)
+        type: 'blackhole',
         name: blackHole.name,
         color: '#a855f7', // Purple for black holes
       });

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A "Terraria in Space" browser game prototype. 2D space exploration with mining, trading, combat, and upgrades.
+A 2D space exploration browser game prototype with mining, trading, combat, and upgrades.
 
 **Core Loop**: Shoot asteroids → Collect resource drops → Sell at stations → Buy upgrades → Explore dangerous zones → Repeat
 

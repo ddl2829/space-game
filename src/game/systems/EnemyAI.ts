@@ -65,6 +65,11 @@ export class EnemyAI {
     target: AITarget | null,
     allPirates: Pirate[]
   ): void {
+    // Passive pirates don't engage - they just fly away
+    if (pirate.getIsPassive()) {
+      return;
+    }
+
     // Handle target detection and state transitions
     if (target) {
       const canDetect = pirate.canDetectTarget(target.x, target.y);
